@@ -423,6 +423,8 @@ func (c *Consumer) twLoop(stopped <-chan none) {
 	ticker := time.NewTicker(c.client.config.Metadata.RefreshFrequency / 2)
 	defer ticker.Stop()
 
+	lastCheckPartitionCache := make(map[string][]int32)
+
 	for {
 		select {
 		case <-ticker.C:
@@ -438,6 +440,33 @@ func (c *Consumer) twLoop(stopped <-chan none) {
 					c.isPotentialExtraTopic(topic) {
 					return
 				}
+
+				/*
+				* Check the change of partitions in each core topic
+				* If changed, trigger rebalance
+				 */
+				if !c.isKnownCoreTopic(topic) {
+					continue
+				}
+
+				newPartitions, err := c.client.Partitions(topic) // newPartitions already sorted
+				if err != nil || newPartitions == nil || len(newPartitions) == 0 {
+					continue
+				}
+				// sort.Sort(int32Slice(newPartitions))
+
+				oldPartitions, ok := lastCheckPartitionCache[topic]
+				if !ok {
+					// we are sure that newPartitions slice is 'thread safe'
+					// and do not need to be copied
+					lastCheckPartitionCache[topic] = newPartitions
+				} else {
+					if !reflect.DeepEqual(oldPartitions, newPartitions) {
+						sarama.Logger.Printf("Partition changed for topic %s: %v, %v, will trigger rebalance\n", topic, oldPartitions, newPartitions)
+						return
+					}
+				}
+
 			}
 		case <-stopped:
 			return
